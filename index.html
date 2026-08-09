@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>עו"ד ורו"ח אסף ברקוביץ — ניהול תיקים ומועדים</title>
+<style>
+  body { font-family: 'Segoe UI', Arial, sans-serif; background: linear-gradient(135deg, #1A3260, #2A5298);
+    color: #fff; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+  .msg { text-align: center; font-size: 18px; }
+</style>
+</head>
+<body>
+<div class="msg" id="msg">⚖️ טוען את האפליקציה...</div>
+<script>
+(async function () {
+  try {
+    var parts = ['app.part0.txt','app.part0b.txt','app.part1.txt','app.part2.txt','app.part3.txt'];
+    var b64 = '';
+    for (var i = 0; i < parts.length; i++) {
+      var resp = await fetch(parts[i], { cache: 'no-store' });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status + ' on ' + parts[i]);
+      b64 += (await resp.text()).trim();
+    }
+    var bin = atob(b64);
+    var bytes = new Uint8Array(bin.length);
+    for (var j = 0; j < bin.length; j++) bytes[j] = bin.charCodeAt(j);
+    var ds = new DecompressionStream('gzip');
+    var buf = await new Response(new Response(bytes).body.pipeThrough(ds)).arrayBuffer();
+    var html = new TextDecoder().decode(buf);
+    document.open();
+    document.write(html);
+    document.close();
+  } catch (e) {
+    document.getElementById('msg').textContent = 'שגיאה בטעינת האפליקציה: ' + e.message + ' — נסה לרענן';
+  }
+})();
+</script>
+</body>
+</html>
