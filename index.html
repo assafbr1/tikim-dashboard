@@ -13,72 +13,15 @@
 <body>
 <div class="msg" id="msg">⚖️ טוען את האפליקציה...</div>
 <script>
-// index.html: טוען את קוד האפליקציה (app.part*.txt) ואת קובץ הנתונים המוצפן.
-// מ-26.10.2026 הנתונים מגיעים בחלקים (data.enc.part0.txt ...), כל חלק עם כותרת JSON בשורה
-// הראשונה: {v, exportedAt, part, parts, sha256}. החלקים מחוברים ומאומתים כאן, ומוגשים לקוד
-// האפליקציה (שמבקש 'data.enc.txt') דרך עטיפה של fetch. אם החלקים חסרים או פגומים (למשל באמצע
-// העלאה לילית), האפליקציה נופלת בחזרה לקובץ data.enc.txt הישן שבמאגר.
 (async function () {
-  async function fetchText(name) {
-    var resp = await fetch(name, { cache: 'no-store' });
-    if (!resp.ok) throw new Error('HTTP ' + resp.status + ' on ' + name);
-    return resp.text();
-  }
-  async function sha256hex(text) {
-    var buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-    return Array.from(new Uint8Array(buf)).map(function (b) { return ('0' + b.toString(16)).slice(-2); }).join('');
-  }
-  function parsePart(raw, name) {
-    var nl = raw.indexOf('\n');
-    if (nl < 0) throw new Error('no header in ' + name);
-    var header = JSON.parse(raw.slice(0, nl));
-    if (header.v !== 1) throw new Error('unknown part version in ' + name);
-    return { header: header, chunk: raw.slice(nl + 1).trim() };
-  }
-  async function loadDataParts() {
-    var first = parsePart(await fetchText('data.enc.part0.txt'), 'data.enc.part0.txt');
-    var n = first.header.parts, chunks = [first.chunk];
-    for (var i = 1; i < n; i++) {
-      var name = 'data.enc.part' + i + '.txt';
-      var p = parsePart(await fetchText(name), name);
-      if (p.header.sha256 !== first.header.sha256 || p.header.parts !== n || p.header.part !== i) {
-        throw new Error('inconsistent header in ' + name);
-      }
-      chunks.push(p.chunk);
-    }
-    var text = chunks.join('');
-    if ((await sha256hex(text)) !== first.header.sha256) throw new Error('sha256 mismatch');
-    JSON.parse(text);
-    return text;
-  }
-  async function loadAppB64() {
-    var n = 4;
-    try { var m = JSON.parse(await fetchText('app.manifest.json')); if (m && m.parts > 0) n = m.parts; } catch (e) {}
-    var b64 = '';
-    for (var i = 0; i < n; i++) b64 += (await fetchText('app.part' + i + '.txt')).trim();
-    return b64;
-  }
   try {
-    var dataText = null;
-    try {
-      dataText = await loadDataParts();
-    } catch (e1) {
-      // ניסיון שני אחרי המתנה קצרה, למקרה שההעלאה הלילית באמצע
-      await new Promise(function (r) { setTimeout(r, 3000); });
-      try { dataText = await loadDataParts(); } catch (e2) { console.warn('data parts unavailable, falling back to data.enc.txt:', e2.message); }
+    var parts = ['app.part0.txt','app.part1.txt','app.part2.txt','app.part3.txt'];
+    var b64 = '';
+    for (var i = 0; i < parts.length; i++) {
+      var resp = await fetch(parts[i], { cache: 'no-store' });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status + ' on ' + parts[i]);
+      b64 += (await resp.text()).trim();
     }
-    window.__dataSource = dataText ? 'parts' : 'legacy';
-    if (dataText) {
-      var realFetch = window.fetch.bind(window);
-      window.fetch = function (input, init) {
-        var url = typeof input === 'string' ? input : (input && input.url) || '';
-        if (url === 'data.enc.txt' || url.indexOf('/data.enc.txt') >= 0) {
-          return Promise.resolve(new Response(dataText, { status: 200, headers: { 'Content-Type': 'application/json' } }));
-        }
-        return realFetch(input, init);
-      };
-    }
-    var b64 = await loadAppB64();
     var bin = atob(b64);
     var bytes = new Uint8Array(bin.length);
     for (var j = 0; j < bin.length; j++) bytes[j] = bin.charCodeAt(j);

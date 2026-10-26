@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-בניית קובץ הנתונים המוצפן של אתר הגיבוי (data.enc.txt) ופיצולו לחלקים קטנים
-(data.enc.part0.txt, data.enc.part1.txt, ...) שאפשר להעלות ל-GitHub חלק אחר חלק.
+בניית קובץ הנתונים המוצפן של אתר הגיבוי (data.enc.txt) ופיצולו לפרוסות קטנות
+(data.enc.part-00.txt, data.enc.part-01.txt, ...) שהריצה הלילית דוחפת לענף build-* פרוסה אחת
+בכל קריאה של push_files. הפעולה .github/workflows/publish-build.yml מאחה את הפרוסות ל-data.enc.txt
+ב-main רק אם ה-sha256 של החיבור זהה לזה שבקובץ data.enc.sha256.
 
 שימוש:
   python3 make_data_parts.py --payload payload.json --password <סיסמה> --out <תיקיית פלט>
@@ -11,11 +13,10 @@
   python3 make_data_parts.py --from-enc data.enc.txt --out <תיקיית פלט>
       רק מפצל קובץ מוצפן קיים.
 
-מבנה כל חלק: שורה ראשונה כותרת JSON {"v":1,"exportedAt","part","parts","sha256"},
-שורה שנייה קטע של עד CHUNK תווים מתוך הטקסט של data.enc.txt. sha256 הוא של הטקסט המלא
-של data.enc.txt, זהה בכל החלקים, וכך index.html של האתר מזהה חלקים מערבוב של שתי ריצות.
+פלט: data.enc.txt (שורה אחת, בלי ירידת שורה בסוף), data.enc.sha256 (sha256 של הטקסט ואחריו
+ירידת שורה), והפרוסות data.enc.part-NN.txt (עד CHUNK תווים כל אחת, בלי ירידת שורה).
 """
-import argparse, base64, gzip, hashlib, json, os, sys
+import argparse, base64, gzip, hashlib, json, os
 
 CHUNK = 10000
 
@@ -40,22 +41,22 @@ def encrypt(payload_text: str, password: str) -> str:
 
 def split(enc_text: str, out_dir: str):
     enc_text = enc_text.strip()
-    meta = json.loads(enc_text)
+    json.loads(enc_text)
     sha = hashlib.sha256(enc_text.encode('utf-8')).hexdigest()
     chunks = [enc_text[i:i + CHUNK] for i in range(0, len(enc_text), CHUNK)]
     os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, 'data.enc.txt'), 'w', encoding='utf-8', newline='') as f:
         f.write(enc_text)
+    with open(os.path.join(out_dir, 'data.enc.sha256'), 'w', encoding='utf-8', newline='') as f:
+        f.write(sha + '\n')
     names = []
     for i, c in enumerate(chunks):
-        header = json.dumps({'v': 1, 'exportedAt': meta.get('exportedAt'), 'part': i,
-                             'parts': len(chunks), 'sha256': sha}, separators=(',', ':'))
-        name = f'data.enc.part{i}.txt'
+        name = f'data.enc.part-{i:02d}.txt'
         with open(os.path.join(out_dir, name), 'w', encoding='utf-8', newline='') as f:
-            f.write(header + '\n' + c + '\n')
+            f.write(c)
         names.append(name)
     print(f'data.enc.txt: {len(enc_text)} תווים, sha256 {sha}')
-    print(f'חלקים: {len(chunks)} (עד {CHUNK} תווים כל אחד): ' + ', '.join(names))
+    print(f'פרוסות: {len(chunks)} (עד {CHUNK} תווים כל אחת): ' + ', '.join(names))
     return names
 
 
