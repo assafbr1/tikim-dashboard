@@ -13,14 +13,45 @@
 <body>
 <div class="msg" id="msg">⚖️ טוען את האפליקציה...</div>
 <script>
+// index.html טוען את קוד האפליקציה (base64 של gzip של site.html) ומפענח אותו.
+// מ-26.10.2026 הקוד מגיע בפרוסות app.b64.part-NN.txt לפי app.manifest.json ({parts, sha256}),
+// שמתפרסמות ל-main דרך ענף build-*-app ופעולת publish-build. אם אין manifest, או שטעינת
+// הפרוסות נכשלת, נטענים ארבעת הקבצים הישנים app.part0.txt עד app.part3.txt.
 (async function () {
-  try {
+  async function fetchText(name) {
+    var resp = await fetch(name, { cache: 'no-store' });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status + ' on ' + name);
+    return resp.text();
+  }
+  async function sha256hex(text) {
+    var buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    return Array.from(new Uint8Array(buf)).map(function (b) { return ('0' + b.toString(16)).slice(-2); }).join('');
+  }
+  async function loadFromManifest() {
+    var m = JSON.parse(await fetchText('app.manifest.json'));
+    if (!m || !(m.parts > 0)) throw new Error('bad manifest');
+    var b64 = '';
+    for (var i = 0; i < m.parts; i++) {
+      b64 += (await fetchText('app.b64.part-' + ('0' + i).slice(-2) + '.txt')).trim();
+    }
+    if (m.sha256 && (await sha256hex(b64)) !== m.sha256) throw new Error('sha256 mismatch');
+    return b64;
+  }
+  async function loadLegacy() {
     var parts = ['app.part0.txt','app.part1.txt','app.part2.txt','app.part3.txt'];
     var b64 = '';
-    for (var i = 0; i < parts.length; i++) {
-      var resp = await fetch(parts[i], { cache: 'no-store' });
-      if (!resp.ok) throw new Error('HTTP ' + resp.status + ' on ' + parts[i]);
-      b64 += (await resp.text()).trim();
+    for (var i = 0; i < parts.length; i++) b64 += (await fetchText(parts[i])).trim();
+    return b64;
+  }
+  try {
+    var b64;
+    try {
+      b64 = await loadFromManifest();
+      window.__appSource = 'manifest';
+    } catch (e1) {
+      console.warn('manifest path unavailable, falling back to app.part0..3:', e1.message);
+      b64 = await loadLegacy();
+      window.__appSource = 'legacy';
     }
     var bin = atob(b64);
     var bytes = new Uint8Array(bin.length);

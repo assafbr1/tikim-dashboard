@@ -1,9 +1,15 @@
-# פרסום אוטומטי של נתוני אתר הגיבוי (דאשבורד התיקים)
-# הסנכרון הלילי דוחף לענף build-* את הפרוסות data.enc.part-NN.txt (עד 10,000 תווים כל אחת,
-# כי קובץ מלא של כ-50,000 תווים אינו עובר בנאמנות בקריאה אחת של push_files) ואת data.enc.sha256
-# (ה-sha256 של הקובץ המלא). הפעולה מאחה את הפרוסות ל-data.enc.txt, מאמתת שה-sha256 של החיבור
-# זהה לזה שבקובץ ושהתוצאה היא JSON תקין עם שדות ההצפנה, ורק אז מעתיקה את data.enc.txt ל-main.
-# שום קובץ אחר (index.html, app.part*.txt, tools) אינו מועתק. בסיום הענף נמחק.
+# פרסום אוטומטי לאתר הגיבוי (דאשבורד התיקים). שני מסלולים לפי שם הענף:
+#
+# 1. נתונים, ענף build-* (למעט *-app): הסנכרון הלילי דוחף את הפרוסות data.enc.part-NN.txt (עד 10,000
+#    תווים כל אחת) ואת data.enc.sha256. הפעולה מאחה, מאמתת sha256 ו-JSON תקין, ומעתיקה את data.enc.txt
+#    ל-main.
+# 2. קוד האתר, ענף build-*-app: המשימה השבועית דוחפת app.b64.sha256, app.manifest.json ואת הפרוסות
+#    app.b64.part-NN.txt. הפעולה מאחה, מאמתת sha256, מפענחת (base64 ואז gunzip), בודקת שהתוצאה היא
+#    HTML שלם של האתר (tools/verify_site_app.py), בודקת בדפדפן שהאתר נטען ומסך הסיסמה עובד
+#    (tools/browser_check.py, בלי הסיסמה האמיתית), ורק אז מעתיקה את הקבצים ל-main.
+#
+# קובץ מחוץ לרשימת המסלול נדחה. כל עוד הפרוסות אינן שלמות (sha256 לא תואם) לא מפרסמים ולא נכשלים:
+# הדחיפה האחרונה היא שמפרסמת. הענף נמחק רק אחרי פרסום (או כשאין שינוי), לא באמצע הדחיפות.
 name: publish-build
 on:
   push:
@@ -22,23 +28,36 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-      - name: איחוי הפרוסות, אימות והעתקת data.enc.txt ל-main
-        id: pub
+      - name: זיהוי המסלול ובדיקת הקבצים שבענף
+        id: route
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -e
+          git fetch origin "$BRANCH"
+          case "$BRANCH" in *-app) route=app ;; *) route=data ;; esac
+          echo "route=$route" >> "$GITHUB_OUTPUT"
+          changed=$(git diff --name-only main "origin/$BRANCH")
+          echo "route: $route"; echo "changed files: $changed"
+          for f in $changed; do
+            if [ "$route" = data ]; then
+              case "$f" in data.enc.txt|data.enc.sha256|data.enc.part-[0-9][0-9].txt) ;;
+                *) echo "הענף משנה קובץ שאינו קובץ נתונים ($f); לא מפורסם אוטומטית"; exit 1 ;; esac
+            else
+              case "$f" in app.b64.sha256|app.manifest.json|app.b64.part-[0-9][0-9].txt) ;;
+                *) echo "הענף משנה קובץ שאינו קובץ קוד ($f); לא מפורסם אוטומטית"; exit 1 ;; esac
+            fi
+          done
+          if [ -z "$changed" ]; then echo "nochange=true" >> "$GITHUB_OUTPUT"; echo "אין שינוי"; else echo "nochange=false" >> "$GITHUB_OUTPUT"; fi
+
+      - name: נתונים, איחוי הפרוסות, אימות והעתקת data.enc.txt ל-main
+        id: pubdata
+        if: steps.route.outputs.route == 'data' && steps.route.outputs.nochange == 'false'
         env:
           BRANCH: ${{ github.ref_name }}
         run: |
           set -e
           echo "done=false" >> "$GITHUB_OUTPUT"
-          git fetch origin "$BRANCH"
-          changed=$(git diff --name-only main "origin/$BRANCH")
-          echo "changed files: $changed"
-          for f in $changed; do
-            case "$f" in
-              data.enc.txt|data.enc.sha256|data.enc.part-[0-9][0-9].txt) ;;
-              *) echo "הענף משנה קובץ שאינו קובץ נתונים ($f); לא מפורסם אוטומטית"; exit 1 ;;
-            esac
-          done
-          if [ -z "$changed" ]; then echo "אין שינוי"; echo "done=true" >> "$GITHUB_OUTPUT"; exit 0; fi
           parts=$(git ls-tree --name-only "origin/$BRANCH" | grep -E '^data\.enc\.part-[0-9]{2}\.txt$' | sort || true)
           if [ -n "$parts" ]; then
             echo "concatenating parts: $parts"
@@ -47,9 +66,6 @@ jobs:
           else
             git checkout "origin/$BRANCH" -- data.enc.txt
           fi
-          # data.enc.sha256 נדחף ראשון, ואחריו הפרוסות אחת אחת; כל דחיפה מפעילה את הפעולה הזו.
-          # כל עוד החיבור אינו תואם ל-sha256 (פרוסות חסרות או פגומות) לא מפרסמים, בלי להיכשל:
-          # הדחיפה האחרונה היא שמפרסמת, והסנכרון הלילי מאמת אחר כך את data.enc.txt ב-main.
           if ! git cat-file -e "origin/$BRANCH:data.enc.sha256" 2>/dev/null; then
             echo "אין data.enc.sha256 בענף; לא מפורסם"; exit 1
           fi
@@ -76,8 +92,82 @@ jobs:
           git commit -m "פרסום נתונים מ-$BRANCH"
           git push origin HEAD:main
           echo "done=true" >> "$GITHUB_OUTPUT"
+
+      - name: קוד, איחוי הפרוסות ואימות sha256
+        id: joinapp
+        if: steps.route.outputs.route == 'app' && steps.route.outputs.nochange == 'false'
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -e
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+          for f in app.b64.sha256 app.manifest.json; do
+            git cat-file -e "origin/$BRANCH:$f" 2>/dev/null || { echo "אין $f בענף עדיין; לא מפורסם בדחיפה הזו"; exit 0; }
+          done
+          rm -rf _app && mkdir _app
+          git show "origin/$BRANCH:app.b64.sha256" > _app/app.b64.sha256
+          git show "origin/$BRANCH:app.manifest.json" > _app/app.manifest.json
+          n=$(python3 -c "import json;print(int(json.load(open('_app/app.manifest.json'))['parts']))")
+          expected=$(tr -d ' \r\n' < _app/app.b64.sha256)
+          msha=$(python3 -c "import json;print(json.load(open('_app/app.manifest.json'))['sha256'])")
+          [ "$expected" = "$msha" ] || { echo "ה-sha256 ב-manifest שונה מזה שב-app.b64.sha256"; exit 1; }
+          joined=""
+          for i in $(seq 0 $((n-1))); do
+            p=$(printf 'app.b64.part-%02d.txt' "$i")
+            if ! git cat-file -e "origin/$BRANCH:$p" 2>/dev/null; then echo "חסרה עדיין $p; לא מפורסם בדחיפה הזו"; exit 0; fi
+            git show "origin/$BRANCH:$p" | tr -d '\r\n' > "_app/$p"
+          done
+          cat $(for i in $(seq 0 $((n-1))); do printf '_app/app.b64.part-%02d.txt ' "$i"; done) > _app/joined.b64
+          actual=$(sha256sum _app/joined.b64 | cut -d' ' -f1)
+          echo "expected sha256: $expected"; echo "actual sha256:   $actual"
+          if [ "$expected" != "$actual" ]; then
+            echo "ה-sha256 של החיבור אינו תואם (פרוסה פגומה או עדיין לא נדחפה); לא מפורסם בדחיפה הזו"; exit 0
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: קוד, פענוח ובדיקת HTML
+        if: steps.joinapp.outputs.ready == 'true'
+        run: |
+          set -e
+          python3 tools/verify_site_app.py --dir _app --expect-sha "$(cat _app/app.b64.sha256)" --write-html _app/site.html
+
+      - name: קוד, התקנת דפדפן לבדיקה
+        if: steps.joinapp.outputs.ready == 'true'
+        run: |
+          set -e
+          pip install -q playwright
+          python3 -m playwright install --with-deps chromium
+
+      - name: קוד, בדיקת דפדפן (טעינה, קריאת הנתונים, דחיית סיסמה שגויה)
+        if: steps.joinapp.outputs.ready == 'true'
+        run: |
+          set -e
+          rm -rf _site && mkdir _site
+          cp index.html data.enc.txt _site/
+          cp _app/app.manifest.json _app/app.b64.part-*.txt _site/
+          python3 tools/browser_check.py --dir _site --expect-source manifest
+
+      - name: קוד, העתקה ל-main
+        id: pubapp
+        if: steps.joinapp.outputs.ready == 'true'
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -e
+          echo "done=false" >> "$GITHUB_OUTPUT"
+          n=$(python3 -c "import json;print(int(json.load(open('_app/app.manifest.json'))['parts']))")
+          git config user.name "tikim-dashboard publish"
+          git config user.email "noreply@github.com"
+          for f in app.b64.part-[0-9][0-9].txt; do [ -e "$f" ] && git rm -q --ignore-unmatch "$f" || true; done
+          cp _app/app.b64.part-*.txt _app/app.b64.sha256 _app/app.manifest.json .
+          git add -A -- app.b64.sha256 app.manifest.json app.b64.part-*.txt
+          if git diff --cached --quiet; then echo "אין שינוי מול main"; echo "done=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          git commit -m "פרסום קוד האתר מ-$BRANCH ($n פרוסות)"
+          git push origin HEAD:main
+          echo "done=true" >> "$GITHUB_OUTPUT"
+
       - name: סגירת PR (אם נפתח) ומחיקת הענף, רק אחרי פרסום או כשאין שינוי
-        if: steps.pub.outputs.done == 'true'
+        if: steps.route.outputs.nochange == 'true' || steps.pubdata.outputs.done == 'true' || steps.pubapp.outputs.done == 'true'
         env:
           BRANCH: ${{ github.ref_name }}
           GH_TOKEN: ${{ github.token }}
