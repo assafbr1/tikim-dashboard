@@ -45,13 +45,18 @@ jobs:
           else
             git checkout "origin/$BRANCH" -- data.enc.txt
           fi
-          if git cat-file -e "origin/$BRANCH:data.enc.sha256" 2>/dev/null; then
-            expected=$(git show "origin/$BRANCH:data.enc.sha256" | tr -d ' \r\n')
-            actual=$(sha256sum data.enc.txt | cut -d' ' -f1)
-            echo "expected sha256: $expected"; echo "actual sha256:   $actual"
-            [ "$expected" = "$actual" ] || { echo "ה-sha256 של החיבור אינו תואם ל-data.enc.sha256; לא מפורסם"; exit 1; }
-          else
-            echo "אזהרה: אין data.enc.sha256 בענף, מפורסם בלי אימות sha256"
+          # data.enc.sha256 נדחף ראשון, ואחריו הפרוסות אחת אחת; כל דחיפה מפעילה את הפעולה הזו.
+          # כל עוד החיבור אינו תואם ל-sha256 (פרוסות חסרות או פגומות) לא מפרסמים, בלי להיכשל:
+          # הדחיפה האחרונה היא שמפרסמת, והסנכרון הלילי מאמת אחר כך את data.enc.txt ב-main.
+          if ! git cat-file -e "origin/$BRANCH:data.enc.sha256" 2>/dev/null; then
+            echo "אין data.enc.sha256 בענף; לא מפורסם"; exit 1
+          fi
+          expected=$(git show "origin/$BRANCH:data.enc.sha256" | tr -d ' \r\n')
+          actual=$(sha256sum data.enc.txt | cut -d' ' -f1)
+          echo "expected sha256: $expected"; echo "actual sha256:   $actual"
+          if [ "$expected" != "$actual" ]; then
+            echo "ה-sha256 של החיבור אינו תואם עדיין ל-data.enc.sha256 (פרוסות חסרות או פגומות); לא מפורסם בדחיפה הזו"
+            exit 0
           fi
           python3 - <<'PY'
           import json, sys
