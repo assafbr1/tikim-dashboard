@@ -22,6 +22,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   publish:
+    if: ${{ !github.event.created }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
